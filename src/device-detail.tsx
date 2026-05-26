@@ -2,7 +2,7 @@ import { Action, ActionPanel, Color, Icon, List, Toast, showToast } from "@rayca
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { assertNever } from "./assert";
 import { DeviceType, Endpoint, MatterSession } from "./matter-session";
-import { BrightnessForm, ColorForm, ColorTempForm } from "./forms";
+import { BrightnessForm, ColorForm, ColorTempForm, RenameForm } from "./forms";
 import {
   BATTERY_CHARGE_LABELS,
   BRIGHTNESS_STEP_PERCENT,
@@ -662,6 +662,17 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
     });
   }
 
+  function handleRename(endpoint: Endpoint, label: string) {
+    return runEndpointOp(endpoint, {
+      title: `Renaming to "${label}"…`,
+      successTitle: () => `Renamed to "${label}"`,
+      failTitle: "Rename failed",
+      optimistic: { nodeLabel: label },
+      rollback: { nodeLabel: endpoint.nodeLabel },
+      run: (session) => session.setNodeLabel(endpoint.endpointId!, label),
+    });
+  }
+
   const views = useMemo(() => buildView(endpoints ?? []), [endpoints]);
   const grouped = useMemo(() => {
     const groups = new Map<Category, TopLevelView[]>();
@@ -811,6 +822,16 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
                         onAction={() => setIsShowingDetail((showing) => !showing)}
                       />
                       <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={refresh} />
+                      {endpoint.endpointId != null && endpoint.reachable !== false && (
+                        <Action.Push
+                          title="Rename…"
+                          icon={Icon.Pencil}
+                          shortcut={{ modifiers: ["cmd", "shift"], key: "r" }}
+                          target={
+                            <RenameForm endpoint={endpoint} onSubmit={(label) => handleRename(endpoint, label)} />
+                          }
+                        />
+                      )}
                       {endpoint.endpointId != null && (
                         <Action.CopyToClipboard title="Copy Endpoint Id" content={String(endpoint.endpointId)} />
                       )}

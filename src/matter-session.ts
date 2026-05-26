@@ -117,6 +117,10 @@ export class MatterSession {
     return this.#request("setColorTemp", { endpointId, mireds });
   }
 
+  setNodeLabel(endpointId: number, label: string): Promise<{ endpointId: number; nodeLabel: string }> {
+    return this.#request("setNodeLabel", { endpointId, label });
+  }
+
   close(): void {
     if (this.#closed) return;
     this.#closed = true;

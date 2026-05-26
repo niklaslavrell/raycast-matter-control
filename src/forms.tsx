@@ -14,9 +14,55 @@ import {
 } from "./format";
 
 const FALLBACK_KELVIN_WHEN_UNKNOWN = 3000;
+const MAX_NODE_LABEL_BYTES = 32;
 
 function lampDisplayName(endpoint: Endpoint): string {
   return endpoint.nodeLabel ?? endpoint.productName ?? "Lamp";
+}
+
+function deviceDisplayName(endpoint: Endpoint): string {
+  return endpoint.nodeLabel ?? endpoint.productName ?? "Device";
+}
+
+export function RenameForm({ endpoint, onSubmit }: { endpoint: Endpoint; onSubmit: (label: string) => void }) {
+  const { pop } = useNavigation();
+  const [error, setError] = useState<string | undefined>();
+
+  function submit(values: { label: string }) {
+    const label = values.label.trim();
+    if (!label) {
+      setError("Name cannot be empty");
+      return;
+    }
+    if (new TextEncoder().encode(label).length > MAX_NODE_LABEL_BYTES) {
+      setError(`Maximum ${MAX_NODE_LABEL_BYTES} UTF-8 bytes`);
+      return;
+    }
+    onSubmit(label);
+    pop();
+  }
+
+  return (
+    <Form
+      navigationTitle={`Rename: ${deviceDisplayName(endpoint)}`}
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm title="Rename Device" icon={Icon.Pencil} onSubmit={submit} />
+        </ActionPanel>
+      }
+    >
+      <Form.TextField
+        id="label"
+        title="Name"
+        placeholder="Living room lamp"
+        defaultValue={endpoint.nodeLabel ?? endpoint.productName ?? ""}
+        info={`Up to ${MAX_NODE_LABEL_BYTES} UTF-8 bytes. Written to the device via BasicInformation or BridgedDeviceBasicInformation.`}
+        error={error}
+        onChange={() => error && setError(undefined)}
+        autoFocus
+      />
+    </Form>
+  );
 }
 
 export function BrightnessForm({

@@ -323,6 +323,32 @@ async function collectEndpoints(pairedNode: PairedNode): Promise<EndpointSnapsho
   return result;
 }
 
+const MAX_NODE_LABEL_BYTES = 32;
+
+async function setEndpointNodeLabel(pairedNode: PairedNode, endpointId: number, label: string) {
+  if (new TextEncoder().encode(label).length > MAX_NODE_LABEL_BYTES) {
+    throw new Error(`label is longer than ${MAX_NODE_LABEL_BYTES} UTF-8 bytes`);
+  }
+  const endpoint = pairedNode.getDeviceById(endpointId);
+  if (!endpoint) throw new Error(`endpoint ${endpointId} not found`);
+  // Bridged child endpoints (e.g. TRADFRI bulbs behind a DIRIGERA) carry their
+  // own BridgedDeviceBasicInformation. Direct devices (e.g. ALPSTUGA) only
+  // expose BasicInformation on the root endpoint, so fall back to that.
+  const bridged = endpoint.getClusterClient(BridgedDeviceBasicInformation.Cluster);
+  if (bridged) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (bridged as any).setNodeLabelAttribute(label);
+    return { endpointId, nodeLabel: label };
+  }
+  const basic = pairedNode.getRootClusterClient(BasicInformation.Cluster);
+  if (basic) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (basic as any).setNodeLabelAttribute(label);
+    return { endpointId, nodeLabel: label };
+  }
+  throw new Error(`endpoint ${endpointId} does not expose a writable nodeLabel`);
+}
+
 async function setEndpointOnOff(pairedNode: PairedNode, endpointId: number, on: boolean) {
   const endpoint = pairedNode.getDeviceById(endpointId);
   if (!endpoint) throw new Error(`endpoint ${endpointId} not found`);
@@ -590,7 +616,8 @@ type SessionRequest =
   | { id: number; method: "setOnOff"; endpointId: number; on: boolean }
   | { id: number; method: "setLevel"; endpointId: number; level: number }
   | { id: number; method: "setColor"; endpointId: number; hue: number; saturation: number }
-  | { id: number; method: "setColorTemp"; endpointId: number; mireds: number };
+  | { id: number; method: "setColorTemp"; endpointId: number; mireds: number }
+  | { id: number; method: "setNodeLabel"; endpointId: number; label: string };
 
 async function runSessionRequest(req: SessionRequest, pairedNode: PairedNode): Promise<unknown> {
   switch (req.method) {
@@ -604,6 +631,8 @@ async function runSessionRequest(req: SessionRequest, pairedNode: PairedNode): P
       return setEndpointColor(pairedNode, Number(req.endpointId), Number(req.hue), Number(req.saturation));
     case "setColorTemp":
       return setEndpointColorTemp(pairedNode, Number(req.endpointId), Number(req.mireds));
+    case "setNodeLabel":
+      return setEndpointNodeLabel(pairedNode, Number(req.endpointId), String(req.label));
     default:
       assertNever(req, "unknown session method");
   }

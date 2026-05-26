@@ -16,7 +16,7 @@ import {
   primaryDeviceTypeName,
   renderDetailMetadata,
 } from "./device-detail";
-import { BrightnessForm, ColorForm, ColorTempForm } from "./forms";
+import { BrightnessForm, ColorForm, ColorTempForm, RenameForm } from "./forms";
 import {
   BRIGHTNESS_STEP_PERCENT,
   COLOR_TEMP_STEP_KELVIN,
@@ -291,6 +291,17 @@ function DevicesView() {
       optimistic: { colorTemperatureMireds: clamped, colorMode: 2 },
       rollback: { colorTemperatureMireds: endpoint.colorTemperatureMireds, colorMode: endpoint.colorMode },
       run: (session) => session.setColorTemp(endpoint.endpointId!, clamped),
+    });
+  }
+
+  function handleRename(nodeId: string, endpoint: Endpoint, label: string) {
+    return runEndpointOp(nodeId, endpoint, {
+      title: `Renaming to "${label}"…`,
+      successTitle: () => `Renamed to "${label}"`,
+      failTitle: "Rename failed",
+      optimistic: { nodeLabel: label },
+      rollback: { nodeLabel: endpoint.nodeLabel },
+      run: (session) => session.setNodeLabel(endpoint.endpointId!, label),
     });
   }
 
@@ -574,6 +585,19 @@ function DevicesView() {
                         shortcut={{ modifiers: ["cmd"], key: "r" }}
                         onAction={refreshAll}
                       />
+                      {endpoint.endpointId != null && endpoint.reachable !== false && (
+                        <Action.Push
+                          title="Rename…"
+                          icon={Icon.Pencil}
+                          shortcut={{ modifiers: ["cmd", "shift"], key: "r" }}
+                          target={
+                            <RenameForm
+                              endpoint={endpoint}
+                              onSubmit={(label) => handleRename(nodeId, endpoint, label)}
+                            />
+                          }
+                        />
+                      )}
                       {endpoint.endpointId != null && (
                         <Action.CopyToClipboard title="Copy Endpoint Id" content={String(endpoint.endpointId)} />
                       )}

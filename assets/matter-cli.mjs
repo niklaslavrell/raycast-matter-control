@@ -130196,6 +130196,26 @@ async function collectEndpoints(pairedNode) {
   return result;
 }
 __name(collectEndpoints, "collectEndpoints");
+var MAX_NODE_LABEL_BYTES = 32;
+async function setEndpointNodeLabel(pairedNode, endpointId, label) {
+  if (new TextEncoder().encode(label).length > MAX_NODE_LABEL_BYTES) {
+    throw new Error(`label is longer than ${MAX_NODE_LABEL_BYTES} UTF-8 bytes`);
+  }
+  const endpoint = pairedNode.getDeviceById(endpointId);
+  if (!endpoint) throw new Error(`endpoint ${endpointId} not found`);
+  const bridged = endpoint.getClusterClient(BridgedDeviceBasicInformation3.Cluster);
+  if (bridged) {
+    await bridged.setNodeLabelAttribute(label);
+    return { endpointId, nodeLabel: label };
+  }
+  const basic = pairedNode.getRootClusterClient(BasicInformation3.Cluster);
+  if (basic) {
+    await basic.setNodeLabelAttribute(label);
+    return { endpointId, nodeLabel: label };
+  }
+  throw new Error(`endpoint ${endpointId} does not expose a writable nodeLabel`);
+}
+__name(setEndpointNodeLabel, "setEndpointNodeLabel");
 async function setEndpointOnOff(pairedNode, endpointId, on) {
   const endpoint = pairedNode.getDeviceById(endpointId);
   if (!endpoint) throw new Error(`endpoint ${endpointId} not found`);
@@ -130436,6 +130456,8 @@ async function runSessionRequest(req, pairedNode) {
       return setEndpointColor(pairedNode, Number(req.endpointId), Number(req.hue), Number(req.saturation));
     case "setColorTemp":
       return setEndpointColorTemp(pairedNode, Number(req.endpointId), Number(req.mireds));
+    case "setNodeLabel":
+      return setEndpointNodeLabel(pairedNode, Number(req.endpointId), String(req.label));
     default:
       assertNever(req, "unknown session method");
   }
