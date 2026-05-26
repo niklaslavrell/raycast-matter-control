@@ -62,6 +62,27 @@ function makeController(): CommissioningController {
   });
 }
 
+// matter.js 0.12's controller.close() can hang indefinitely if the mDNS or UDP
+// sockets are in a weird state (observed after network interface changes).
+// For one-shot subcommands the work is already done by the time we close, so
+// fail open after a short wait rather than block the process from exiting.
+const CLOSE_TIMEOUT_MS = 3000;
+async function closeController(controller: CommissioningController): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      controller.close(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`controller.close() timed out after ${CLOSE_TIMEOUT_MS}ms`)), CLOSE_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (err) {
+    process.stderr.write(`${(err as Error).message}\n`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // matter.js formats SecureChannel errors as "(generalStatus/protocolStatus) …".
 // GeneralStatusCode.Busy = 8 and ProtocolStatusCode.Busy = 4 → "(8/4)".
 const BUSY_STATUS_PREFIX = "(8/4)";
@@ -387,7 +408,7 @@ async function listDevices() {
       vendorName: details.deviceData?.basicInformation?.vendorName ?? null,
     }));
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 
@@ -398,7 +419,7 @@ async function inspectNode(nodeIdStr: string): Promise<EndpointSnapshot[]> {
     const pairedNode = await controller.connectNode(NodeId(BigInt(nodeIdStr)));
     return await collectEndpoints(pairedNode);
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 
@@ -509,7 +530,7 @@ async function getHubInfo(nodeIdStr: string) {
       endpoints,
     };
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 
@@ -523,7 +544,7 @@ async function decommissionDevice(nodeIdStr: string) {
     await controller.removeNode(NodeId(BigInt(nodeIdStr)), true);
     return { nodeId: nodeIdStr };
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 
@@ -542,7 +563,7 @@ async function pairDevice(code: string) {
     });
     return { nodeId: nodeId.toString() };
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 
@@ -553,10 +574,7 @@ type SessionRequest =
   | { id: number; method: "setColor"; endpointId: number; hue: number; saturation: number }
   | { id: number; method: "setColorTemp"; endpointId: number; mireds: number };
 
-async function runSessionRequest(
-  req: SessionRequest,
-  pairedNode: PairedNode,
-): Promise<unknown> {
+async function runSessionRequest(req: SessionRequest, pairedNode: PairedNode): Promise<unknown> {
   switch (req.method) {
     case "inspect":
       return collectEndpoints(pairedNode);
@@ -607,7 +625,7 @@ async function runSession(nodeIdStr: string): Promise<void> {
   try {
     pairedNode = await withBusyRetry(() => controller.connectNode(NodeId(BigInt(nodeIdStr))));
   } catch (err) {
-    await controller.close();
+    await closeController(controller);
     throw err;
   }
   emit({ event: "ready" });
@@ -623,7 +641,7 @@ async function runSession(nodeIdStr: string): Promise<void> {
 
   await new Promise<void>((resolve) => rl.on("close", () => resolve()));
   await pending.catch(() => {});
-  await controller.close();
+  await closeController(controller);
 }
 
 async function main(): Promise<void> {

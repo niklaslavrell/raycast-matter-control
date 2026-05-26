@@ -129971,6 +129971,24 @@ function makeController() {
   });
 }
 __name(makeController, "makeController");
+var CLOSE_TIMEOUT_MS = 3e3;
+async function closeController(controller) {
+  let timer;
+  try {
+    await Promise.race([
+      controller.close(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`controller.close() timed out after ${CLOSE_TIMEOUT_MS}ms`)), CLOSE_TIMEOUT_MS);
+      })
+    ]);
+  } catch (err) {
+    process.stderr.write(`${err.message}
+`);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+__name(closeController, "closeController");
 var BUSY_STATUS_PREFIX = "(8/4)";
 var BUSY_RETRY_ATTEMPTS = 3;
 var BUSY_RETRY_BASE_DELAY_MS = 800;
@@ -130251,7 +130269,7 @@ async function listDevices() {
       vendorName: details.deviceData?.basicInformation?.vendorName ?? null
     }));
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 __name(listDevices, "listDevices");
@@ -130262,7 +130280,7 @@ async function inspectNode(nodeIdStr) {
     const pairedNode = await controller.connectNode(NodeId(BigInt(nodeIdStr)));
     return await collectEndpoints(pairedNode);
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 __name(inspectNode, "inspectNode");
@@ -130360,7 +130378,7 @@ async function getHubInfo(nodeIdStr) {
       endpoints
     };
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 __name(getHubInfo, "getHubInfo");
@@ -130371,7 +130389,7 @@ async function decommissionDevice(nodeIdStr) {
     await controller.removeNode(NodeId(BigInt(nodeIdStr)), true);
     return { nodeId: nodeIdStr };
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 __name(decommissionDevice, "decommissionDevice");
@@ -130390,7 +130408,7 @@ async function pairDevice(code2) {
     });
     return { nodeId: nodeId3.toString() };
   } finally {
-    await controller.close();
+    await closeController(controller);
   }
 }
 __name(pairDevice, "pairDevice");
@@ -130438,7 +130456,7 @@ async function runSession(nodeIdStr) {
   try {
     pairedNode = await withBusyRetry(() => controller.connectNode(NodeId(BigInt(nodeIdStr))));
   } catch (err) {
-    await controller.close();
+    await closeController(controller);
     throw err;
   }
   emit({ event: "ready" });
@@ -130452,7 +130470,7 @@ async function runSession(nodeIdStr) {
   await new Promise((resolve3) => rl.on("close", () => resolve3()));
   await pending.catch(() => {
   });
-  await controller.close();
+  await closeController(controller);
 }
 __name(runSession, "runSession");
 async function main() {
