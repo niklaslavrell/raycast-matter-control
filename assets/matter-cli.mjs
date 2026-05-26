@@ -129966,7 +129966,7 @@ function makeController() {
   return new CommissioningController({
     environment: { environment, id: CONTROLLER_ID },
     // adminFabricLabel is required as of matter.js 0.12 (must be 1–32 chars).
-    adminFabricLabel: "Raycast",
+    adminFabricLabel: "Raycast Matter Control",
     autoConnect: false
   });
 }
