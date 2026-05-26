@@ -63,23 +63,24 @@ export function primaryDeviceType(endpoint: Endpoint): { name: string; code: num
   return primary ?? null;
 }
 
-// Map matter.js device-type names (e.g. "OnOffPlugInUnit") to user-facing labels.
-// matter.js gives PascalCase names; we split on case boundaries and special-case
-// a few that don't read well naturally.
-const DEVICE_TYPE_LABEL_OVERRIDES: Record<number, string> = {
-  [DT.OnOffPlugInUnit]: "Outlet",
-  [DT.OnOffLight]: "On/Off Light",
-  [DT.GenericSwitch]: "Switch",
-};
-
 function splitPascalCase(name: string): string {
   return name.replace(/^MA-?/i, "").replace(/([a-z])([A-Z])/g, "$1 $2");
+}
+
+// matter.js exposes device-type names as lowercase strings like
+// "MA-extendedcolorlight" with no word boundaries. Prefer our DT enum's
+// PascalCase key — it splits cleanly into "Extended Color Light".
+function labelFromDtEnum(code: number): string | null {
+  for (const [key, value] of Object.entries(DT)) {
+    if (value === code) return splitPascalCase(key);
+  }
+  return null;
 }
 
 export function primaryDeviceTypeName(endpoint: Endpoint): string {
   const primary = primaryDeviceType(endpoint);
   if (!primary) return "Unknown";
-  return DEVICE_TYPE_LABEL_OVERRIDES[primary.code] ?? splitPascalCase(primary.name);
+  return labelFromDtEnum(primary.code) ?? splitPascalCase(primary.name);
 }
 
 function hasGenericSwitchChild(children: Endpoint[]): boolean {
