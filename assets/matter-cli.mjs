@@ -130170,9 +130170,21 @@ async function describeEndpoint(ep, parentEndpointId) {
 }
 __name(describeEndpoint, "describeEndpoint");
 async function collectEndpoints(pairedNode) {
+  const rootBasic = pairedNode.getRootClusterClient(BasicInformation3.Cluster);
+  const [rootNodeLabel, rootProductName, rootVendorName] = await Promise.all([
+    tryRead(rootBasic, "getNodeLabelAttribute"),
+    tryRead(rootBasic, "getProductNameAttribute"),
+    tryRead(rootBasic, "getVendorNameAttribute")
+  ]);
   const result = [];
   async function visit(ep, parentEndpointId) {
-    result.push(await describeEndpoint(ep, parentEndpointId));
+    const description = await describeEndpoint(ep, parentEndpointId);
+    if (ep.getClusterClient(BridgedDeviceBasicInformation3.Cluster) == null) {
+      description.nodeLabel ??= rootNodeLabel;
+      description.productName ??= rootProductName;
+      description.vendorName ??= rootVendorName;
+    }
+    result.push(description);
     for (const child of ep.getChildEndpoints()) {
       await visit(child, ep.number ?? null);
     }

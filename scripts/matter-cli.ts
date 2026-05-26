@@ -292,9 +292,27 @@ async function describeEndpoint(ep: Endpoint, parentEndpointId: number | null) {
 type EndpointSnapshot = Awaited<ReturnType<typeof describeEndpoint>>;
 
 async function collectEndpoints(pairedNode: PairedNode): Promise<EndpointSnapshot[]> {
+  // BridgedDeviceBasicInformation carries per-device label/product/vendor on
+  // bridged children (e.g. TRADFRI bulbs behind DIRIGERA). Direct Matter
+  // devices (e.g. ALPSTUGA) only expose BasicInformation on the root, so for
+  // their child endpoints we surface the root's values as the display fallback.
+  // Without this, a directly-paired sensor's user-given nodeLabel never shows.
+  const rootBasic = pairedNode.getRootClusterClient(BasicInformation.Cluster);
+  const [rootNodeLabel, rootProductName, rootVendorName] = await Promise.all([
+    tryRead<string>(rootBasic, "getNodeLabelAttribute"),
+    tryRead<string>(rootBasic, "getProductNameAttribute"),
+    tryRead<string>(rootBasic, "getVendorNameAttribute"),
+  ]);
+
   const result: EndpointSnapshot[] = [];
   async function visit(ep: Endpoint, parentEndpointId: number | null): Promise<void> {
-    result.push(await describeEndpoint(ep, parentEndpointId));
+    const description = await describeEndpoint(ep, parentEndpointId);
+    if (ep.getClusterClient(BridgedDeviceBasicInformation.Cluster) == null) {
+      description.nodeLabel ??= rootNodeLabel;
+      description.productName ??= rootProductName;
+      description.vendorName ??= rootVendorName;
+    }
+    result.push(description);
     for (const child of ep.getChildEndpoints()) {
       await visit(child, ep.number ?? null);
     }
