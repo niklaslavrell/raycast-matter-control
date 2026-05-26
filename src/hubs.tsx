@@ -172,8 +172,20 @@ function HubsView() {
     }
   }
 
+  const totalHubs = data?.length ?? 0;
+
   return (
-    <List isLoading={isLoading} isShowingDetail={isShowingDetail}>
+    <List
+      isLoading={isLoading}
+      isShowingDetail={isShowingDetail}
+      searchBarPlaceholder={
+        totalHubs > 0
+          ? `Search ${totalHubs} hub${totalHubs === 1 ? "" : "s"}…`
+          : isLoading
+            ? "Loading hubs…"
+            : "No hubs"
+      }
+    >
       {(data ?? []).map((node) => {
         const title = nodeTitle(node);
         const online = node.operationalAddress != null;
@@ -198,7 +210,6 @@ function HubsView() {
                   color: online ? Color.Green : Color.SecondaryText,
                 },
               },
-              ...(isShowingDetail ? [] : [{ text: shortAddress(node.operationalAddress) }]),
             ]}
             detail={<List.Item.Detail metadata={renderHubDetail(node, status, info, errMsg, loadedAt)} />}
             actions={
@@ -246,7 +257,7 @@ function HubsView() {
       })}
       <List.EmptyView
         icon={Icon.Plug}
-        title={isLoading ? "Loading…" : "No paired hubs"}
+        title={isLoading ? "Loading hubs…" : "No paired hubs"}
         description={isLoading ? undefined : "Pair a device with this controller using the Pair Device command."}
       />
     </List>
