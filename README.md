@@ -43,10 +43,10 @@ Storage (fabric keys, paired-node IDs, matter.js state) lives in the extension's
 
 ## Known limitations
 
-- DIRIGERA throttles too-frequent CASE handshakes; first action after a long idle can be slow.
-- Thread devices are unreachable without a Thread Border Router.
-- Devices already paired to another Matter ecosystem (Apple Home, Google Home, etc.) need to be *shared* into this fabric via multi-admin, not re-commissioned.
-- Matter `Groups` and `Scenes` clusters aren't wired up — devices toggle one at a time.
+- **First action after idling can be slow.** The IKEA DIRIGERA hub rejects new secure connections if asked too often, so the extension waits and retries. If the connection has gone stale (e.g. after the extension's been closed a while), the first toggle can take a couple of seconds while a fresh connection is set up.
+- **Thread-based devices need a hub on your network.** Some Matter devices (e.g. IKEA ALPSTUGA) use Thread, a low-power mesh radio, instead of Wi-Fi. They reach your Mac through a *Thread Border Router* — usually a HomePod, recent Apple TV, or the DIRIGERA hub. Without one of these on your network, Thread devices won't show up.
+- **Already paired to Apple Home or Google Home? Use sharing, not re-pairing.** A Matter device can be controlled by several apps at once, but only if the original app *shares* it with the new one. In Apple Home, open the accessory → "Turn On Pairing Mode" → enter the code in Raycast's Pair Device. Factory-resetting and re-commissioning works too, but you lose the device from the other app.
+- **No rooms, groups, or scenes yet.** Devices toggle one at a time — no "all lights off" or "movie scene" actions. Matter supports these via Groups/Scenes clusters but the extension doesn't yet.
 
 ## Development
 
