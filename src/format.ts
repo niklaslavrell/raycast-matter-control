@@ -232,10 +232,36 @@ export const POLLUTANT_KEYS = [
 
 export function formatConcentration(concentration: Concentration | null): string | null {
   if (!concentration) return null;
-  const suffix = concentration.unit != null ? UNIT_SUFFIX[concentration.unit] : null;
-  const value = concentration.value;
-  const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
-  return suffix ? `${rounded} ${suffix}` : `${rounded}`;
+  if (concentration.value != null) {
+    const suffix = concentration.unit != null ? UNIT_SUFFIX[concentration.unit] : null;
+    const rounded =
+      concentration.value >= 100 ? Math.round(concentration.value) : Math.round(concentration.value * 10) / 10;
+    return suffix ? `${rounded} ${suffix}` : `${rounded}`;
+  }
+  return concentrationLevelLabel(concentration.level);
+}
+
+// LevelValue enum from the ConcentrationMeasurement cluster spec.
+const CONCENTRATION_LEVEL_LABELS = ["Unknown", "Low", "Medium", "High", "Critical"] as const;
+
+export function concentrationLevelLabel(level: number | null): string | null {
+  if (level == null || level < 0 || level >= CONCENTRATION_LEVEL_LABELS.length) return null;
+  return CONCENTRATION_LEVEL_LABELS[level];
+}
+
+export function concentrationLevelColor(level: number | null): Color {
+  switch (level) {
+    case 1:
+      return Color.Green;
+    case 2:
+      return Color.Yellow;
+    case 3:
+      return Color.Orange;
+    case 4:
+      return Color.Red;
+    default:
+      return Color.SecondaryText;
+  }
 }
 
 // ---- Air quality index ----

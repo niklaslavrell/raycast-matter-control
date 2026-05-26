@@ -2,7 +2,14 @@ import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { cliEnv, cliPath, extractRealError } from "./cli";
 
 export type DeviceType = { name: string; code: number };
-export type Concentration = { value: number; unit: number | null };
+// A pollutant reading is either a numeric measurement (value + unit) or a
+// qualitative level (e.g. Low/Medium/High), or both. The ConcentrationMeasurement
+// cluster lets devices implement either or both per feature flag.
+export type Concentration = {
+  value: number | null;
+  unit: number | null;
+  level: number | null;
+};
 export type Endpoint = {
   endpointId: number | null;
   parentEndpointId: number | null;

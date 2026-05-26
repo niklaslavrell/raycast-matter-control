@@ -149,17 +149,22 @@ async function readAllFabrics(creds: any): Promise<unknown> {
   }
 }
 
-type ConcentrationReading = { value: number; unit: number | null };
+// A pollutant cluster can expose a numeric measurement, a level enum (Low/
+// Medium/High/Critical), or both, depending on the device's feature flags.
+// e.g. VINDSTYRKA reports TVOC as level-only (no calibrated ppm number).
+type ConcentrationReading = { value: number | null; unit: number | null; level: number | null };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function readConcentration(ep: Endpoint, ClusterDef: any): Promise<ConcentrationReading | null> {
   const cluster = ep.getClusterClient(ClusterDef);
   if (!cluster) return null;
-  const [value, unit] = await Promise.all([
+  const [value, unit, level] = await Promise.all([
     tryRead<number>(cluster, "getMeasuredValueAttribute"),
     tryRead<number>(cluster, "getMeasurementUnitAttribute"),
+    tryRead<number>(cluster, "getLevelValueAttribute"),
   ]);
-  return value == null ? null : { value, unit: unit ?? null };
+  if (value == null && level == null) return null;
+  return { value: value ?? null, unit: unit ?? null, level: level ?? null };
 }
 
 async function describeEndpoint(ep: Endpoint, parentEndpointId: number | null) {

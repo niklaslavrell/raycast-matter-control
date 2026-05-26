@@ -130039,11 +130039,13 @@ __name(readAllFabrics, "readAllFabrics");
 async function readConcentration(ep, ClusterDef) {
   const cluster = ep.getClusterClient(ClusterDef);
   if (!cluster) return null;
-  const [value, unit] = await Promise.all([
+  const [value, unit, level] = await Promise.all([
     tryRead(cluster, "getMeasuredValueAttribute"),
-    tryRead(cluster, "getMeasurementUnitAttribute")
+    tryRead(cluster, "getMeasurementUnitAttribute"),
+    tryRead(cluster, "getLevelValueAttribute")
   ]);
-  return value == null ? null : { value, unit: unit ?? null };
+  if (value == null && level == null) return null;
+  return { value: value ?? null, unit: unit ?? null, level: level ?? null };
 }
 __name(readConcentration, "readConcentration");
 async function describeEndpoint(ep, parentEndpointId) {

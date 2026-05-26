@@ -1,7 +1,7 @@
 import { Action, ActionPanel, Color, Icon, List, Toast, showToast } from "@raycast/api";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { assertNever } from "./assert";
-import { DeviceType, Endpoint, MatterSession } from "./matter-session";
+import { Concentration, DeviceType, Endpoint, MatterSession } from "./matter-session";
 import { BrightnessForm, ColorForm, ColorTempForm, RenameForm } from "./forms";
 import {
   BATTERY_CHARGE_LABELS,
@@ -16,6 +16,8 @@ import {
   aqiLabel,
   batteryChargeColor,
   colorTempKelvin,
+  concentrationLevelColor,
+  concentrationLevelLabel,
   ctRange,
   formatConcentration,
   formatRelativeTime,
@@ -28,6 +30,19 @@ import {
   stepColorTemp,
   stepLevel,
 } from "./format";
+
+// Numeric pollutants render as plain "PM2.5 12 µg/m³" text. Level-only readings
+// (e.g. VINDSTYRKA's TVOC) render as a colored tag like AQI does.
+function pollutantAccessory(label: string, concentration: Concentration | null): List.Item.Accessory | null {
+  if (!concentration) return null;
+  if (concentration.value != null) {
+    const text = formatConcentration(concentration);
+    return text ? { text: { value: `${label} ${text}` } } : null;
+  }
+  const levelText = concentrationLevelLabel(concentration.level);
+  if (!levelText) return null;
+  return { tag: { value: `${label} ${levelText}`, color: concentrationLevelColor(concentration.level) } };
+}
 
 // Matter device type codes (from the Matter device library spec).
 export const DT = {
@@ -215,12 +230,12 @@ export function fullAccessoriesFor(
     if (humid != null) acc.push({ icon: Icon.Raindrop, text: `${humid.toFixed(0)}%` });
     const aqiText = aqiLabel(aqi);
     if (aqiText) acc.push({ tag: { value: aqiText, color: aqiColor(aqi) } });
-    const pm25Text = formatConcentration(pm25);
-    if (pm25Text) acc.push({ text: { value: `PM2.5 ${pm25Text}` } });
-    const co2Text = formatConcentration(co2);
-    if (co2Text) acc.push({ text: { value: `CO₂ ${co2Text}` } });
-    const tvocText = formatConcentration(tvoc);
-    if (tvocText) acc.push({ text: { value: `TVOC ${tvocText}` } });
+    const pm25Acc = pollutantAccessory("PM2.5", pm25);
+    if (pm25Acc) acc.push(pm25Acc);
+    const co2Acc = pollutantAccessory("CO₂", co2);
+    if (co2Acc) acc.push(co2Acc);
+    const tvocAcc = pollutantAccessory("TVOC", tvoc);
+    if (tvocAcc) acc.push(tvocAcc);
   }
 
   if (category === "remote" && endpoint.batteryPercent != null) {
@@ -375,8 +390,19 @@ function buildSensorStateItems(endpoint: Endpoint, children: Endpoint[]): React.
 
   for (const [key, label] of POLLUTANT_KEYS) {
     const value = findSelfOrChildWith(endpoint, children, key);
-    const text = formatConcentration(value);
-    if (text) items.push(<Metadata.Label key={key} title={label} text={text} />);
+    if (!value) continue;
+    if (value.value != null) {
+      const text = formatConcentration(value);
+      if (text) items.push(<Metadata.Label key={key} title={label} text={text} />);
+      continue;
+    }
+    const levelText = concentrationLevelLabel(value.level);
+    if (!levelText) continue;
+    items.push(
+      <Metadata.TagList key={key} title={label}>
+        <Metadata.TagList.Item text={levelText} color={concentrationLevelColor(value.level)} />
+      </Metadata.TagList>,
+    );
   }
   return items;
 }
