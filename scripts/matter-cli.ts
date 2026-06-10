@@ -159,7 +159,9 @@ async function startWithLockRetry(controller: CommissioningController): Promise<
 
 // Mute matter.js logs entirely. stdout is reserved for JSON I/O and stderr
 // for our structured error output — matter.js's warn/info noise corrupts both.
-Logger.log = () => {};
+if (!process.env.MATTER_DEBUG) {
+  Logger.log = () => {};
+}
 
 const environment = Environment.default;
 environment.vars.set("storage.path", storagePath);
@@ -170,6 +172,55 @@ function makeController(): CommissioningController {
     // adminFabricLabel is required as of matter.js 0.12 (must be 1–32 chars).
     adminFabricLabel: "Raycast Matter Control",
     autoConnect: false,
+  });
+}
+
+// After connectNode resolves, matter.js's subscription is still arriving
+// from the device. On a Matter bridge with many bridged children (DIRIGERA
+// exposes 50+ endpoints) the initial getDevices() returns a partial list
+// because the structure is still being populated. There's no single reliable
+// "ready" event on the PairedNode that fires on every flow, so wait until
+// endpoint-structure change events have gone quiet for a few seconds, capped
+// at a hard 30s so a slow / stalled bridge can't block the UI forever.
+const STRUCTURE_IDLE_MS = 3000;
+const STRUCTURE_MAX_MS = 30000;
+async function waitForStructureSettled(pairedNode: PairedNode): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const events = (pairedNode as any).events;
+  if (!events) return;
+  await new Promise<void>((resolve) => {
+    let idleTimer: NodeJS.Timeout | undefined;
+    let maxTimer: NodeJS.Timeout | undefined;
+    let done = false;
+
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (idleTimer) clearTimeout(idleTimer);
+      if (maxTimer) clearTimeout(maxTimer);
+      try {
+        events.structureChanged?.off?.(onChange);
+        events.nodeEndpointAdded?.off?.(onChange);
+        events.nodeEndpointChanged?.off?.(onChange);
+      } catch {
+        // ignore
+      }
+      resolve();
+    };
+    const onChange = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(finish, STRUCTURE_IDLE_MS);
+    };
+
+    try {
+      events.structureChanged?.on?.(onChange);
+      events.nodeEndpointAdded?.on?.(onChange);
+      events.nodeEndpointChanged?.on?.(onChange);
+    } catch {
+      // If the event API isn't what we expect, fall through to the timer-only path.
+    }
+    idleTimer = setTimeout(finish, STRUCTURE_IDLE_MS);
+    maxTimer = setTimeout(finish, STRUCTURE_MAX_MS);
   });
 }
 
@@ -283,7 +334,11 @@ async function describeEndpoint(ep: Endpoint, parentEndpointId: number | null) {
   const onOff = ep.getClusterClient(OnOff.Cluster);
   const level = ep.getClusterClient(LevelControl.Cluster);
   const color = ep.getClusterClient(ColorControl.Cluster);
-  const power = ep.getClusterClient(PowerSource.Cluster);
+  // matter.js 0.15.6 types PowerSource.Cluster as an extensible base that
+  // requires feature selection (`.with("Battery")` etc). Devices declare
+  // which features they support — we just want whatever the endpoint has.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const power = ep.getClusterClient(PowerSource.Cluster as any);
   const temp = ep.getClusterClient(TemperatureMeasurement.Cluster);
   const humid = ep.getClusterClient(RelativeHumidityMeasurement.Cluster);
   const airQuality = ep.getClusterClient(AirQuality.Cluster);
@@ -797,6 +852,12 @@ async function runSession(): Promise<void> {
     const existing = connected.get(nodeIdStr);
     if (existing) return existing;
     const pairedNode = await withBusyRetry(() => controller.connectNode(NodeId(BigInt(nodeIdStr))));
+    // connectNode resolves before matter.js has finished pulling every
+    // endpoint from the device. On a Matter bridge like DIRIGERA that exposes
+    // 50+ bridged children, an early getDevices() returns only the partial
+    // set discovered so far. Wait for endpoint-structure events to settle
+    // (no changes for N seconds) before considering the node ready.
+    await waitForStructureSettled(pairedNode);
     connected.set(nodeIdStr, pairedNode);
     return pairedNode;
   }
