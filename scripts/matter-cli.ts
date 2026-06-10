@@ -95,6 +95,36 @@ function cleanupStaleLockfile(): void {
 
 cleanupStaleLockfile();
 
+// matter.js's own lock acquisition is one-shot — it does NOT retry, and it
+// considers zombie/defunct processes as still holding the lock. When a
+// previous CLI crashed or got killed by Raycast's worker teardown, the lock
+// can outlive it briefly. Retry a few times: between attempts, re-check the
+// holder's state and clean up if it's no longer healthy.
+async function startWithLockRetry(controller: CommissioningController): Promise<void> {
+  const maxAttempts = 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await controller.start();
+      return;
+    } catch (err) {
+      const message = (err as Error)?.message ?? "";
+      const cause = (err as Error & { cause?: Error })?.cause;
+      const causeMessage = cause?.message ?? "";
+      const lockPidMatch = (message + " " + causeMessage).match(/Storage is locked by another process \(pid (\d+)\)/);
+      if (!lockPidMatch || attempt === maxAttempts - 1) throw err;
+      const heldByPid = Number(lockPidMatch[1]);
+      if (isProcessHealthy(heldByPid)) {
+        // Real live holder (e.g. a previous CLI still finishing its teardown).
+        // Wait briefly for it to release, then retry.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } else {
+        // Zombie / dead holder — clean the lockfile ourselves and retry.
+        cleanupStaleLockfile();
+      }
+    }
+  }
+}
+
 // Mute matter.js logs entirely. stdout is reserved for JSON I/O and stderr
 // for our structured error output — matter.js's warn/info noise corrupts both.
 Logger.log = () => {};
@@ -727,7 +757,7 @@ async function runSession(): Promise<void> {
   }
 
   const controller = makeController();
-  await controller.start();
+  await startWithLockRetry(controller);
   emit({ event: "ready" });
 
   const connected = new Map<string, PairedNode>();

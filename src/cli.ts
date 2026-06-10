@@ -25,6 +25,11 @@ export function isNoiseLine(line: string): boolean {
 
 export function extractRealError(stderr: string, exitCode: number | null): string {
   const lines = stderr.replace(ANSI_RE, "").trim().split("\n");
+  // Prefer the deepest "Caused by:" line — matter.js wraps the real error in
+  // a generic "MatterController unavailable" outer, and the innermost cause
+  // is what the user actually wants to see.
+  const causedBy = lines.filter((line) => /^Caused by:/.test(line.trim()));
+  if (causedBy.length > 0) return causedBy[causedBy.length - 1].trim();
   const named = lines.find((line) => ERROR_CLASS_RE.test(line.trim()));
   if (named) return named.trim();
   const real = lines.find((line) => !isNoiseLine(line));

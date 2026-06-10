@@ -124379,6 +124379,28 @@ function cleanupStaleLockfile() {
 }
 __name(cleanupStaleLockfile, "cleanupStaleLockfile");
 cleanupStaleLockfile();
+async function startWithLockRetry(controller) {
+  const maxAttempts = 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await controller.start();
+      return;
+    } catch (err) {
+      const message = err?.message ?? "";
+      const cause = err?.cause;
+      const causeMessage = cause?.message ?? "";
+      const lockPidMatch = (message + " " + causeMessage).match(/Storage is locked by another process \(pid (\d+)\)/);
+      if (!lockPidMatch || attempt === maxAttempts - 1) throw err;
+      const heldByPid = Number(lockPidMatch[1]);
+      if (isProcessHealthy(heldByPid)) {
+        await new Promise((resolve9) => setTimeout(resolve9, 500));
+      } else {
+        cleanupStaleLockfile();
+      }
+    }
+  }
+}
+__name(startWithLockRetry, "startWithLockRetry");
 Logger.log = () => {
 };
 var environment = Environment.default;
@@ -124897,7 +124919,7 @@ async function runSession() {
   }
   __name(emit, "emit");
   const controller = makeController();
-  await controller.start();
+  await startWithLockRetry(controller);
   emit({ event: "ready" });
   const connected = /* @__PURE__ */ new Map();
   async function ensureConnected(nodeIdStr) {
