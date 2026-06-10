@@ -124332,7 +124332,9 @@ var WindowCovering3 = ClusterType(WindowCovering2);
 var ZoneManagement3 = ClusterType(ZoneManagement2);
 
 // scripts/matter-cli.ts
-import { mkdirSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync as existsSync4, mkdirSync, readFileSync as readFileSync3, rmSync as rmSync2 } from "node:fs";
+import { join as join4 } from "node:path";
 import { createInterface } from "node:readline";
 var CONTROLLER_ID = "raycast-matter";
 var storagePath = process.env.MATTER_STORAGE_PATH;
@@ -124341,6 +124343,42 @@ if (!storagePath) {
   process.exit(1);
 }
 mkdirSync(storagePath, { recursive: true });
+function isProcessHealthy(pid) {
+  try {
+    const state = execSync(`ps -p ${pid} -o state=`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    if (!state) return false;
+    return !state.startsWith("Z");
+  } catch {
+    return false;
+  }
+}
+__name(isProcessHealthy, "isProcessHealthy");
+function cleanupStaleLockfile() {
+  const lockDir = join4(storagePath, CONTROLLER_ID);
+  const lockFile = join4(lockDir, "matter.lock");
+  const pidFile = join4(lockDir, "matter.pid");
+  if (!existsSync4(lockFile) && !existsSync4(pidFile)) return;
+  let pid = null;
+  try {
+    pid = Number(readFileSync3(pidFile, "utf8").trim().split(/\s+/)[0]);
+  } catch {
+  }
+  if (pid != null && !Number.isNaN(pid) && isProcessHealthy(pid)) {
+    return;
+  }
+  process.stderr.write(`[matter-cli] removing stale lockfile (pid ${pid ?? "?"} no longer healthy)
+`);
+  try {
+    rmSync2(lockFile, { force: true });
+  } catch {
+  }
+  try {
+    rmSync2(pidFile, { force: true });
+  } catch {
+  }
+}
+__name(cleanupStaleLockfile, "cleanupStaleLockfile");
+cleanupStaleLockfile();
 Logger.log = () => {
 };
 var environment = Environment.default;

@@ -34,7 +34,9 @@ import {
 } from "@matter/main/clusters";
 import type { Endpoint } from "@project-chip/matter.js/device";
 import type { PairedNode } from "@project-chip/matter.js/device";
-import { mkdirSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const CONTROLLER_ID = "raycast-matter";
@@ -45,6 +47,53 @@ if (!storagePath) {
   process.exit(1);
 }
 mkdirSync(storagePath, { recursive: true });
+
+// matter.js 0.17 writes a matter.lock + matter.pid file in the storage
+// directory to prevent concurrent access. If a previous CLI process exited
+// uncleanly (or got killed by Raycast's worker teardown), the lockfile can
+// outlive it and block all future runs. matter.js's own staleness check
+// treats zombie processes as alive, so we need to do it ourselves.
+function isProcessHealthy(pid: number): boolean {
+  try {
+    const state = execSync(`ps -p ${pid} -o state=`, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+    if (!state) return false; // PID is gone
+    return !state.startsWith("Z"); // Z = zombie/defunct
+  } catch {
+    return false;
+  }
+}
+
+function cleanupStaleLockfile(): void {
+  const lockDir = join(storagePath!, CONTROLLER_ID);
+  const lockFile = join(lockDir, "matter.lock");
+  const pidFile = join(lockDir, "matter.pid");
+  if (!existsSync(lockFile) && !existsSync(pidFile)) return;
+  let pid: number | null = null;
+  try {
+    pid = Number(readFileSync(pidFile, "utf8").trim().split(/\s+/)[0]);
+  } catch {
+    // No PID file — clear the orphan lock and move on.
+  }
+  if (pid != null && !Number.isNaN(pid) && isProcessHealthy(pid)) {
+    // Real live CLI holds the lock — let matter.js produce its own error.
+    return;
+  }
+  process.stderr.write(`[matter-cli] removing stale lockfile (pid ${pid ?? "?"} no longer healthy)\n`);
+  try {
+    rmSync(lockFile, { force: true });
+  } catch {
+    // ignore
+  }
+  try {
+    rmSync(pidFile, { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+cleanupStaleLockfile();
 
 // Mute matter.js logs entirely. stdout is reserved for JSON I/O and stderr
 // for our structured error output — matter.js's warn/info noise corrupts both.
