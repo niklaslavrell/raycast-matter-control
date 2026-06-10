@@ -57,11 +57,58 @@ type Pending = {
   reject: (err: Error) => void;
 };
 
+export type NodeInfo = {
+  nodeId: string;
+  operationalAddress: string | null;
+  advertisedName: string | null;
+  productName: string | null;
+  vendorName: string | null;
+};
+
+export type FabricInfo = {
+  fabricIndex: number | null;
+  fabricId: string | null;
+  nodeId: string | null;
+  vendorId: number | null;
+  label: string | null;
+};
+
+export type HubInfo = {
+  basicInformation: {
+    vendorName: string | null;
+    productName: string | null;
+    productLabel: string | null;
+    nodeLabel: string | null;
+    hardwareVersion: string | null;
+    softwareVersion: string | null;
+    serialNumber: string | null;
+    uniqueId: string | null;
+    manufacturingDate: string | null;
+    partNumber: string | null;
+    productUrl: string | null;
+    reachable: boolean | null;
+  };
+  diagnostics: {
+    upTimeSeconds: number | null;
+    totalOperationalHours: number | null;
+    rebootCount: number | null;
+    bootReason: number | null;
+  };
+  fabrics: FabricInfo[];
+  commissioning: {
+    windowStatus: number | null;
+    adminVendorId: number | null;
+    adminFabricIndex: number | null;
+  };
+  endpoints: Endpoint[];
+};
+
 /**
- * Wraps a long-lived `matter-cli session <nodeId>` child process so callers can
- * issue multiple inspect/toggle requests over one persistent Matter (CASE)
- * session. Avoids the IKEA Dirigera's per-session throttling that hits with
- * one-shot spawns.
+ * Long-lived `matter-cli session` daemon. One subprocess per Raycast UI command
+ * holds a single CommissioningController and lazily connects each PairedNode
+ * on first use. All operations route through this one process — required by
+ * matter.js 0.16+'s storage lock and a workaround for the Dirigera Busy
+ * throttling that hits one-shot spawns.
  */
 export class MatterSession {
   readonly ready: Promise<void>;
@@ -76,13 +123,13 @@ export class MatterSession {
   #resolveReady!: () => void;
   #rejectReady!: (err: Error) => void;
 
-  constructor(nodeId: string) {
+  constructor() {
     this.ready = new Promise<void>((resolve, reject) => {
       this.#resolveReady = resolve;
       this.#rejectReady = reject;
     });
 
-    this.#child = spawn(process.execPath, [cliPath(), "session", nodeId], {
+    this.#child = spawn(process.execPath, [cliPath(), "session"], {
       env: cliEnv(),
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -97,35 +144,57 @@ export class MatterSession {
     });
   }
 
-  inspect(): Promise<Endpoint[]> {
-    return this.#request<Endpoint[]>("inspect");
+  listNodes(): Promise<NodeInfo[]> {
+    return this.#request<NodeInfo[]>("list");
   }
 
-  setOnOff(endpointId: number, on: boolean): Promise<{ endpointId: number; onOff: boolean | null }> {
-    return this.#request("setOnOff", { endpointId, on });
+  pair(code: string): Promise<{ nodeId: string }> {
+    return this.#request("pair", { code });
   }
 
-  setLevel(endpointId: number, level: number): Promise<{ endpointId: number; currentLevel: number; onOff: boolean }> {
-    return this.#request("setLevel", { endpointId, level });
+  decommission(nodeId: string): Promise<{ nodeId: string }> {
+    return this.#request("decommission", { nodeId });
+  }
+
+  inspect(nodeId: string): Promise<Endpoint[]> {
+    return this.#request<Endpoint[]>("inspect", { nodeId });
+  }
+
+  hubInfo(nodeId: string): Promise<HubInfo> {
+    return this.#request<HubInfo>("hubInfo", { nodeId });
+  }
+
+  setOnOff(nodeId: string, endpointId: number, on: boolean): Promise<{ endpointId: number; onOff: boolean | null }> {
+    return this.#request("setOnOff", { nodeId, endpointId, on });
+  }
+
+  setLevel(
+    nodeId: string,
+    endpointId: number,
+    level: number,
+  ): Promise<{ endpointId: number; currentLevel: number; onOff: boolean }> {
+    return this.#request("setLevel", { nodeId, endpointId, level });
   }
 
   setColor(
+    nodeId: string,
     endpointId: number,
     hue: number,
     saturation: number,
   ): Promise<{ endpointId: number; currentHue: number; currentSaturation: number; colorMode: number }> {
-    return this.#request("setColor", { endpointId, hue, saturation });
+    return this.#request("setColor", { nodeId, endpointId, hue, saturation });
   }
 
   setColorTemp(
+    nodeId: string,
     endpointId: number,
     mireds: number,
   ): Promise<{ endpointId: number; colorTemperatureMireds: number; colorMode: number }> {
-    return this.#request("setColorTemp", { endpointId, mireds });
+    return this.#request("setColorTemp", { nodeId, endpointId, mireds });
   }
 
-  setNodeLabel(endpointId: number, label: string): Promise<{ endpointId: number; nodeLabel: string }> {
-    return this.#request("setNodeLabel", { endpointId, label });
+  setNodeLabel(nodeId: string, endpointId: number, label: string): Promise<{ endpointId: number; nodeLabel: string }> {
+    return this.#request("setNodeLabel", { nodeId, endpointId, label });
   }
 
   close(): void {

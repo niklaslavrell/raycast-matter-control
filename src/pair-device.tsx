@@ -1,13 +1,7 @@
 import { Action, ActionPanel, Form, Icon, Toast, popToRoot, showToast } from "@raycast/api";
-import { useState } from "react";
-import { runCli } from "./cli";
+import { useEffect, useRef, useState } from "react";
 import { ErrorBoundary } from "./error-boundary";
-
-type PairResult = { nodeId: string };
-
-function pair(code: string): Promise<PairResult> {
-  return runCli<PairResult>("pair", [code]);
-}
+import { MatterSession } from "./matter-session";
 
 export default function PairDeviceCommand() {
   return (
@@ -18,10 +12,22 @@ export default function PairDeviceCommand() {
 }
 
 function PairDeviceView() {
+  const sessionRef = useRef<MatterSession | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [codeError, setCodeError] = useState<string | undefined>();
 
+  useEffect(() => {
+    const session = new MatterSession();
+    sessionRef.current = session;
+    return () => {
+      session.close();
+      sessionRef.current = null;
+    };
+  }, []);
+
   async function handleSubmit(values: { code: string }) {
+    const session = sessionRef.current;
+    if (!session) return;
     const code = values.code.trim();
     if (!code) {
       setCodeError("Required");
@@ -37,7 +43,8 @@ function PairDeviceView() {
     });
 
     try {
-      const { nodeId } = await pair(code);
+      await session.ready;
+      const { nodeId } = await session.pair(code);
       toast.style = Toast.Style.Success;
       toast.title = "Device paired";
       toast.message = `Node ${nodeId}`;

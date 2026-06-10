@@ -1,66 +1,12 @@
 import { Action, ActionPanel, Alert, Color, Icon, List, Toast, confirmAlert, showToast } from "@raycast/api";
-import { useExec } from "@raycast/utils";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { assertNever } from "./assert";
-import { cliEnv, cliPath, runCli, runCliVoid } from "./cli";
 import { DeviceDetail, primaryDeviceTypeName } from "./device-detail";
 import { ErrorBoundary } from "./error-boundary";
 import { RELATIVE_TIME_TICK_MS, formatRelativeTime, formatUptime } from "./format";
-import { Endpoint } from "./matter-session";
-
-type NodeInfo = {
-  nodeId: string;
-  operationalAddress: string | null;
-  advertisedName: string | null;
-  productName: string | null;
-  vendorName: string | null;
-};
-
-type HubInfo = {
-  basicInformation: {
-    vendorName: string | null;
-    productName: string | null;
-    productLabel: string | null;
-    nodeLabel: string | null;
-    hardwareVersion: string | null;
-    softwareVersion: string | null;
-    serialNumber: string | null;
-    uniqueId: string | null;
-    manufacturingDate: string | null;
-    partNumber: string | null;
-    productUrl: string | null;
-    reachable: boolean | null;
-  };
-  diagnostics: {
-    upTimeSeconds: number | null;
-    totalOperationalHours: number | null;
-    rebootCount: number | null;
-    bootReason: number | null;
-  };
-  fabrics: Array<{
-    fabricIndex: number | null;
-    fabricId: string | null;
-    nodeId: string | null;
-    vendorId: number | null;
-    label: string | null;
-  }>;
-  commissioning: {
-    windowStatus: number | null;
-    adminVendorId: number | null;
-    adminFabricIndex: number | null;
-  };
-  endpoints: Endpoint[];
-};
+import { HubInfo, MatterSession, NodeInfo } from "./matter-session";
 
 type DiagStatus = "idle" | "loading" | "loaded" | "error";
-
-function runHubInfo(nodeId: string): Promise<HubInfo> {
-  return runCli<HubInfo>("hub-info", [nodeId]);
-}
-
-function decommissionCli(nodeId: string): Promise<void> {
-  return runCliVoid("decommission", [nodeId]);
-}
 
 // Matter vendor IDs we recognize. 0xFFF1 is the Matter test vendor; IKEA dev
 // builds and various test devices use it.
@@ -100,23 +46,49 @@ export default function HubsCommand() {
 }
 
 function HubsView() {
-  const { isLoading, data, error, revalidate } = useExec(process.execPath, [cliPath(), "list"], {
-    env: cliEnv(),
-    parseOutput: ({ stdout }) => JSON.parse(stdout) as NodeInfo[],
-    keepPreviousData: true,
-  });
-
-  useEffect(() => {
-    if (error) {
-      showToast({ style: Toast.Style.Failure, title: "Failed to list hubs", message: error.message });
-    }
-  }, [error]);
+  const sessionRef = useRef<MatterSession | null>(null);
+  const [data, setData] = useState<NodeInfo[] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<Error | null>(null);
 
   const [isShowingDetail, setIsShowingDetail] = useState(false);
   const [diagStatus, setDiagStatus] = useState<Record<string, DiagStatus>>({});
   const [diagData, setDiagData] = useState<Record<string, HubInfo>>({});
   const [diagError, setDiagError] = useState<Record<string, string>>({});
   const [diagLoadedAt, setDiagLoadedAt] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const session = new MatterSession();
+    sessionRef.current = session;
+
+    async function bootstrap() {
+      try {
+        await session.ready;
+        const nodes = await session.listNodes();
+        if (cancelled) return;
+        setData(nodes);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err as Error);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    void bootstrap();
+
+    return () => {
+      cancelled = true;
+      session.close();
+      sessionRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (error) {
+      showToast({ style: Toast.Style.Failure, title: "Failed to list hubs", message: error.message });
+    }
+  }, [error]);
 
   // Tick once every 10s so "Loaded Xs ago" stays current.
   const [, setNowTick] = useState(0);
@@ -126,7 +98,20 @@ function HubsView() {
     return () => clearInterval(id);
   }, [diagLoadedAt]);
 
+  async function revalidate() {
+    const session = sessionRef.current;
+    if (!session) return;
+    try {
+      const nodes = await session.listNodes();
+      setData(nodes);
+    } catch (err) {
+      setError(err as Error);
+    }
+  }
+
   async function loadDiagnostics(nodeId: string) {
+    const session = sessionRef.current;
+    if (!session) return;
     setDiagStatus((current) => ({ ...current, [nodeId]: "loading" }));
     setDiagError((current) => {
       const next = { ...current };
@@ -134,7 +119,7 @@ function HubsView() {
       return next;
     });
     try {
-      const info = await runHubInfo(nodeId);
+      const info = await session.hubInfo(nodeId);
       setDiagData((current) => ({ ...current, [nodeId]: info }));
       setDiagLoadedAt((current) => ({ ...current, [nodeId]: Date.now() }));
       setDiagStatus((current) => ({ ...current, [nodeId]: "loaded" }));
@@ -145,6 +130,8 @@ function HubsView() {
   }
 
   async function handleUnpair(node: NodeInfo) {
+    const session = sessionRef.current;
+    if (!session) return;
     const title = nodeTitle(node);
     const confirmed = await confirmAlert({
       title: "Unpair this device?",
@@ -160,11 +147,11 @@ function HubsView() {
       message: "Removing fabric from device. This can take a moment.",
     });
     try {
-      await decommissionCli(node.nodeId);
+      await session.decommission(node.nodeId);
       toast.style = Toast.Style.Success;
       toast.title = "Unpaired";
       toast.message = title;
-      revalidate();
+      await revalidate();
     } catch (err) {
       toast.style = Toast.Style.Failure;
       toast.title = "Unpair failed";
@@ -214,11 +201,13 @@ function HubsView() {
             detail={<List.Item.Detail metadata={renderHubDetail(node, status, info, errMsg, loadedAt)} />}
             actions={
               <ActionPanel>
-                <Action.Push
-                  title="Show Endpoints"
-                  icon={Icon.AppWindowList}
-                  target={<DeviceDetail nodeId={node.nodeId} title={title} />}
-                />
+                {sessionRef.current && (
+                  <Action.Push
+                    title="Show Endpoints"
+                    icon={Icon.AppWindowList}
+                    target={<DeviceDetail nodeId={node.nodeId} title={title} session={sessionRef.current} />}
+                  />
+                )}
                 <Action
                   title={isShowingDetail ? "Hide Details" : "Show Details"}
                   icon={Icon.Sidebar}

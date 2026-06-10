@@ -445,44 +445,86 @@ async function setEndpointLevel(pairedNode: PairedNode, endpointId: number, leve
   return { endpointId, currentLevel: clamped, onOff: true };
 }
 
-async function listDevices() {
-  const controller = makeController();
-  await controller.start();
-  try {
-    return controller.getCommissionedNodesDetails().map((details) => ({
-      nodeId: details.nodeId.toString(),
-      operationalAddress: details.operationalAddress ?? null,
-      advertisedName: details.advertisedName ?? null,
-      productName: details.deviceData?.basicInformation?.productName ?? null,
-      vendorName: details.deviceData?.basicInformation?.vendorName ?? null,
-    }));
-  } finally {
-    await closeController(controller);
-  }
+// Pure helper that operates on an already-started controller. The same payload
+// is returned whether called from the one-shot `list` subcommand or the
+// long-lived session loop.
+function readCommissionedNodes(controller: CommissioningController) {
+  return controller.getCommissionedNodesDetails().map((details) => ({
+    nodeId: details.nodeId.toString(),
+    operationalAddress: details.operationalAddress ?? null,
+    advertisedName: details.advertisedName ?? null,
+    productName: details.deviceData?.basicInformation?.productName ?? null,
+    vendorName: details.deviceData?.basicInformation?.vendorName ?? null,
+  }));
 }
 
-async function inspectNode(nodeIdStr: string): Promise<EndpointSnapshot[]> {
-  const controller = makeController();
-  await controller.start();
-  try {
-    const pairedNode = await controller.connectNode(NodeId(BigInt(nodeIdStr)));
-    return await collectEndpoints(pairedNode);
-  } finally {
-    await closeController(controller);
-  }
-}
+// Body of the hub-info readout, separated from controller lifecycle so the
+// long-lived session can call it on an already-connected PairedNode.
+async function readHubInfo(pairedNode: PairedNode) {
+  const basic = pairedNode.getRootClusterClient(BasicInformation.Cluster);
+  const diag = pairedNode.getRootClusterClient(GeneralDiagnostics.Cluster);
+  const creds = pairedNode.getRootClusterClient(OperationalCredentials.Cluster);
+  const adminComm = pairedNode.getRootClusterClient(AdministratorCommissioning.Cluster);
 
-async function getHubInfo(nodeIdStr: string) {
-  const controller = makeController();
-  await controller.start();
-  try {
-    const pairedNode = await controller.connectNode(NodeId(BigInt(nodeIdStr)));
-    const basic = pairedNode.getRootClusterClient(BasicInformation.Cluster);
-    const diag = pairedNode.getRootClusterClient(GeneralDiagnostics.Cluster);
-    const creds = pairedNode.getRootClusterClient(OperationalCredentials.Cluster);
-    const adminComm = pairedNode.getRootClusterClient(AdministratorCommissioning.Cluster);
+  const [
+    vendorName,
+    productName,
+    productLabel,
+    nodeLabel,
+    hardwareVersion,
+    softwareVersion,
+    serialNumber,
+    uniqueId,
+    manufacturingDate,
+    partNumber,
+    productUrl,
+    reachable,
+    upTime,
+    totalOperationalHours,
+    rebootCount,
+    bootReason,
+    fabrics,
+    windowStatus,
+    adminVendorId,
+    adminFabricIndex,
+  ] = await Promise.all([
+    tryRead<string>(basic, "getVendorNameAttribute"),
+    tryRead<string>(basic, "getProductNameAttribute"),
+    tryRead<string>(basic, "getProductLabelAttribute"),
+    tryRead<string>(basic, "getNodeLabelAttribute"),
+    tryRead<string>(basic, "getHardwareVersionStringAttribute"),
+    tryRead<string>(basic, "getSoftwareVersionStringAttribute"),
+    tryRead<string>(basic, "getSerialNumberAttribute"),
+    tryRead<string>(basic, "getUniqueIdAttribute"),
+    tryRead<string>(basic, "getManufacturingDateAttribute"),
+    tryRead<string>(basic, "getPartNumberAttribute"),
+    tryRead<string>(basic, "getProductUrlAttribute"),
+    tryRead<boolean>(basic, "getReachableAttribute"),
+    tryRead<number | bigint>(diag, "getUpTimeAttribute"),
+    tryRead<number>(diag, "getTotalOperationalHoursAttribute"),
+    tryRead<number>(diag, "getRebootCountAttribute"),
+    tryRead<number>(diag, "getBootReasonAttribute"),
+    // Bypass tryRead/getter: fabrics is FabricScoped — the generated getter
+    // returns only our own fabric. Read directly with isFabricFiltered=false
+    // to see ALL controllers paired to this device (Apple Home, Google Home, etc).
+    readAllFabrics(creds),
+    tryRead<number>(adminComm, "getWindowStatusAttribute"),
+    tryRead<number>(adminComm, "getAdminVendorIdAttribute"),
+    tryRead<number>(adminComm, "getAdminFabricIndexAttribute"),
+  ]);
 
-    const [
+  const endpoints = await collectEndpoints(pairedNode);
+
+  type FabricDescriptor = {
+    fabricIndex?: number;
+    fabricId?: bigint | number;
+    nodeId?: bigint | number;
+    vendorId?: number;
+    label?: string;
+  };
+
+  return {
+    basicInformation: {
       vendorName,
       productName,
       productLabel,
@@ -495,149 +537,111 @@ async function getHubInfo(nodeIdStr: string) {
       partNumber,
       productUrl,
       reachable,
-      upTime,
-      totalOperationalHours,
-      rebootCount,
-      bootReason,
-      fabrics,
-      windowStatus,
-      adminVendorId,
-      adminFabricIndex,
-    ] = await Promise.all([
-      tryRead<string>(basic, "getVendorNameAttribute"),
-      tryRead<string>(basic, "getProductNameAttribute"),
-      tryRead<string>(basic, "getProductLabelAttribute"),
-      tryRead<string>(basic, "getNodeLabelAttribute"),
-      tryRead<string>(basic, "getHardwareVersionStringAttribute"),
-      tryRead<string>(basic, "getSoftwareVersionStringAttribute"),
-      tryRead<string>(basic, "getSerialNumberAttribute"),
-      tryRead<string>(basic, "getUniqueIdAttribute"),
-      tryRead<string>(basic, "getManufacturingDateAttribute"),
-      tryRead<string>(basic, "getPartNumberAttribute"),
-      tryRead<string>(basic, "getProductUrlAttribute"),
-      tryRead<boolean>(basic, "getReachableAttribute"),
-      tryRead<number | bigint>(diag, "getUpTimeAttribute"),
-      tryRead<number>(diag, "getTotalOperationalHoursAttribute"),
-      tryRead<number>(diag, "getRebootCountAttribute"),
-      tryRead<number>(diag, "getBootReasonAttribute"),
-      // Bypass tryRead/getter: fabrics is FabricScoped — the generated getter
-      // returns only our own fabric. Read directly with isFabricFiltered=false
-      // to see ALL controllers paired to this device (Apple Home, Google Home, etc).
-      readAllFabrics(creds),
-      tryRead<number>(adminComm, "getWindowStatusAttribute"),
-      tryRead<number>(adminComm, "getAdminVendorIdAttribute"),
-      tryRead<number>(adminComm, "getAdminFabricIndexAttribute"),
-    ]);
-
-    const endpoints = await collectEndpoints(pairedNode);
-
-    type FabricDescriptor = {
-      fabricIndex?: number;
-      fabricId?: bigint | number;
-      nodeId?: bigint | number;
-      vendorId?: number;
-      label?: string;
-    };
-
-    return {
-      basicInformation: {
-        vendorName,
-        productName,
-        productLabel,
-        nodeLabel,
-        hardwareVersion,
-        softwareVersion,
-        serialNumber,
-        uniqueId,
-        manufacturingDate,
-        partNumber,
-        productUrl,
-        reachable,
-      },
-      diagnostics: {
-        // upTime can be a BigInt for high values; coerce to Number for JSON.
-        upTimeSeconds: upTime == null ? null : Number(upTime),
-        totalOperationalHours: totalOperationalHours ?? null,
-        rebootCount: rebootCount ?? null,
-        bootReason: bootReason ?? null,
-      },
-      fabrics: Array.isArray(fabrics)
-        ? (fabrics as FabricDescriptor[]).map((fabric) => ({
-            fabricIndex: fabric.fabricIndex ?? null,
-            fabricId: fabric.fabricId == null ? null : String(fabric.fabricId),
-            nodeId: fabric.nodeId == null ? null : String(fabric.nodeId),
-            vendorId: fabric.vendorId == null ? null : Number(fabric.vendorId),
-            label: fabric.label ?? null,
-          }))
-        : [],
-      commissioning: {
-        // 0 = WindowNotOpen, 1 = EnhancedWindowOpen, 2 = BasicWindowOpen.
-        windowStatus: windowStatus ?? null,
-        adminVendorId: adminVendorId == null ? null : Number(adminVendorId),
-        adminFabricIndex: adminFabricIndex ?? null,
-      },
-      endpoints,
-    };
-  } finally {
-    await closeController(controller);
-  }
+    },
+    diagnostics: {
+      // upTime can be a BigInt for high values; coerce to Number for JSON.
+      upTimeSeconds: upTime == null ? null : Number(upTime),
+      totalOperationalHours: totalOperationalHours ?? null,
+      rebootCount: rebootCount ?? null,
+      bootReason: bootReason ?? null,
+    },
+    fabrics: Array.isArray(fabrics)
+      ? (fabrics as FabricDescriptor[]).map((fabric) => ({
+          fabricIndex: fabric.fabricIndex ?? null,
+          fabricId: fabric.fabricId == null ? null : String(fabric.fabricId),
+          nodeId: fabric.nodeId == null ? null : String(fabric.nodeId),
+          vendorId: fabric.vendorId == null ? null : Number(fabric.vendorId),
+          label: fabric.label ?? null,
+        }))
+      : [],
+    commissioning: {
+      // 0 = WindowNotOpen, 1 = EnhancedWindowOpen, 2 = BasicWindowOpen.
+      windowStatus: windowStatus ?? null,
+      adminVendorId: adminVendorId == null ? null : Number(adminVendorId),
+      adminFabricIndex: adminFabricIndex ?? null,
+    },
+    endpoints,
+  };
 }
 
-async function decommissionDevice(nodeIdStr: string) {
-  const controller = makeController();
-  await controller.start();
-  try {
-    // removeNode tries decommission first; if the device is unreachable it
-    // still removes the node from the controller's local storage. That's
-    // friendlier than failing when the device is offline or already wiped.
-    await controller.removeNode(NodeId(BigInt(nodeIdStr)), true);
-    return { nodeId: nodeIdStr };
-  } finally {
-    await closeController(controller);
-  }
+// removeNode tries decommission first; if the device is unreachable it still
+// removes the node from the controller's local storage. That's friendlier
+// than failing when the device is offline or already wiped.
+async function removeCommissionedNode(controller: CommissioningController, nodeIdStr: string) {
+  await controller.removeNode(NodeId(BigInt(nodeIdStr)), true);
+  return { nodeId: nodeIdStr };
 }
 
-async function pairDevice(code: string) {
+async function commissionPairingCode(controller: CommissioningController, code: string) {
   const decoded = ManualPairingCodeCodec.decode(code);
-  const controller = makeController();
-  await controller.start();
-  try {
-    const nodeId = await controller.commissionNode({
-      commissioning: {
-        regulatoryLocation: GeneralCommissioning.RegulatoryLocationType.IndoorOutdoor,
-        regulatoryCountryCode: "XX",
-      },
-      discovery: { identifierData: { shortDiscriminator: decoded.shortDiscriminator } },
-      passcode: decoded.passcode,
-    });
-    return { nodeId: nodeId.toString() };
-  } finally {
-    await closeController(controller);
-  }
+  const nodeId = await controller.commissionNode({
+    commissioning: {
+      regulatoryLocation: GeneralCommissioning.RegulatoryLocationType.IndoorOutdoor,
+      regulatoryCountryCode: "XX",
+    },
+    discovery: { identifierData: { shortDiscriminator: decoded.shortDiscriminator } },
+    passcode: decoded.passcode,
+  });
+  return { nodeId: nodeId.toString() };
 }
 
 type SessionRequest =
-  | { id: number; method: "inspect" }
-  | { id: number; method: "setOnOff"; endpointId: number; on: boolean }
-  | { id: number; method: "setLevel"; endpointId: number; level: number }
-  | { id: number; method: "setColor"; endpointId: number; hue: number; saturation: number }
-  | { id: number; method: "setColorTemp"; endpointId: number; mireds: number }
-  | { id: number; method: "setNodeLabel"; endpointId: number; label: string };
+  | { id: number; method: "list" }
+  | { id: number; method: "pair"; code: string }
+  | { id: number; method: "decommission"; nodeId: string }
+  | { id: number; method: "inspect"; nodeId: string }
+  | { id: number; method: "hubInfo"; nodeId: string }
+  | { id: number; method: "setOnOff"; nodeId: string; endpointId: number; on: boolean }
+  | { id: number; method: "setLevel"; nodeId: string; endpointId: number; level: number }
+  | { id: number; method: "setColor"; nodeId: string; endpointId: number; hue: number; saturation: number }
+  | { id: number; method: "setColorTemp"; nodeId: string; endpointId: number; mireds: number }
+  | { id: number; method: "setNodeLabel"; nodeId: string; endpointId: number; label: string };
 
-async function runSessionRequest(req: SessionRequest, pairedNode: PairedNode): Promise<unknown> {
+type SessionContext = {
+  controller: CommissioningController;
+  ensureConnected: (nodeIdStr: string) => Promise<PairedNode>;
+  evict: (nodeIdStr: string) => void;
+};
+
+async function runSessionRequest(req: SessionRequest, ctx: SessionContext): Promise<unknown> {
   switch (req.method) {
-    case "inspect":
+    case "list":
+      return readCommissionedNodes(ctx.controller);
+    case "pair":
+      return commissionPairingCode(ctx.controller, String(req.code));
+    case "decommission": {
+      const nodeIdStr = String(req.nodeId);
+      ctx.evict(nodeIdStr);
+      return removeCommissionedNode(ctx.controller, nodeIdStr);
+    }
+    case "inspect": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
       return collectEndpoints(pairedNode);
-    case "setOnOff":
+    }
+    case "hubInfo": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
+      return readHubInfo(pairedNode);
+    }
+    case "setOnOff": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
       return setEndpointOnOff(pairedNode, Number(req.endpointId), Boolean(req.on));
-    case "setLevel":
+    }
+    case "setLevel": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
       return setEndpointLevel(pairedNode, Number(req.endpointId), Number(req.level));
-    case "setColor":
+    }
+    case "setColor": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
       return setEndpointColor(pairedNode, Number(req.endpointId), Number(req.hue), Number(req.saturation));
-    case "setColorTemp":
+    }
+    case "setColorTemp": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
       return setEndpointColorTemp(pairedNode, Number(req.endpointId), Number(req.mireds));
-    case "setNodeLabel":
+    }
+    case "setNodeLabel": {
+      const pairedNode = await ctx.ensureConnected(String(req.nodeId));
       return setEndpointNodeLabel(pairedNode, Number(req.endpointId), String(req.label));
+    }
     default:
       assertNever(req, "unknown session method");
   }
@@ -645,7 +649,7 @@ async function runSessionRequest(req: SessionRequest, pairedNode: PairedNode): P
 
 async function handleSessionLine(
   line: string,
-  pairedNode: PairedNode,
+  ctx: SessionContext,
   emit: (obj: unknown) => void,
 ): Promise<void> {
   let req: SessionRequest;
@@ -656,31 +660,39 @@ async function handleSessionLine(
     return;
   }
   try {
-    const result = await runSessionRequest(req, pairedNode);
+    const result = await runSessionRequest(req, ctx);
     emit({ id: req.id, result });
   } catch (err) {
     emit({ id: req.id, error: String((err as Error)?.message ?? err) });
   }
 }
 
-// Long-lived session mode: holds one Matter session open and dispatches
-// newline-delimited JSON-RPC requests from stdin. Avoids per-operation
-// CASE re-handshake (which the IKEA Dirigera throttles with Busy responses).
-async function runSession(nodeIdStr: string): Promise<void> {
+// Long-lived session mode: holds one CommissioningController open and dispatches
+// newline-delimited JSON-RPC requests from stdin. Lazily connects each
+// PairedNode on first node-routed request and caches it, so subsequent
+// operations against the same hub reuse the same CASE session — the IKEA
+// Dirigera throttles per-operation re-handshakes with Busy responses.
+async function runSession(): Promise<void> {
   function emit(obj: unknown): void {
     process.stdout.write(JSON.stringify(obj) + "\n");
   }
 
   const controller = makeController();
   await controller.start();
-  let pairedNode: PairedNode;
-  try {
-    pairedNode = await withBusyRetry(() => controller.connectNode(NodeId(BigInt(nodeIdStr))));
-  } catch (err) {
-    await closeController(controller);
-    throw err;
-  }
   emit({ event: "ready" });
+
+  const connected = new Map<string, PairedNode>();
+  async function ensureConnected(nodeIdStr: string): Promise<PairedNode> {
+    const existing = connected.get(nodeIdStr);
+    if (existing) return existing;
+    const pairedNode = await withBusyRetry(() => controller.connectNode(NodeId(BigInt(nodeIdStr))));
+    connected.set(nodeIdStr, pairedNode);
+    return pairedNode;
+  }
+  function evict(nodeIdStr: string): void {
+    connected.delete(nodeIdStr);
+  }
+  const ctx: SessionContext = { controller, ensureConnected, evict };
 
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   let pending: Promise<void> = Promise.resolve();
@@ -688,7 +700,7 @@ async function runSession(nodeIdStr: string): Promise<void> {
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    pending = pending.then(() => handleSessionLine(trimmed, pairedNode, emit));
+    pending = pending.then(() => handleSessionLine(trimmed, ctx, emit));
   });
 
   await new Promise<void>((resolve) => rl.on("close", () => resolve()));
@@ -697,49 +709,13 @@ async function runSession(nodeIdStr: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [, , subcommand, ...args] = process.argv;
+  const [, , subcommand] = process.argv;
   switch (subcommand) {
-    case "list": {
-      const result = await listDevices();
-      process.stdout.write(JSON.stringify(result));
+    case "session":
+      await runSession();
       return;
-    }
-    case "pair": {
-      const code = args[0];
-      if (!code) throw new Error("usage: matter-cli pair <pairing-code>");
-      const result = await pairDevice(code);
-      process.stdout.write(JSON.stringify(result));
-      return;
-    }
-    case "hub-info": {
-      const nodeIdStr = args[0];
-      if (!nodeIdStr) throw new Error("usage: matter-cli hub-info <nodeId>");
-      const result = await getHubInfo(nodeIdStr);
-      process.stdout.write(JSON.stringify(result));
-      return;
-    }
-    case "decommission": {
-      const nodeIdStr = args[0];
-      if (!nodeIdStr) throw new Error("usage: matter-cli decommission <nodeId>");
-      const result = await decommissionDevice(nodeIdStr);
-      process.stdout.write(JSON.stringify(result));
-      return;
-    }
-    case "inspect": {
-      const nodeIdStr = args[0];
-      if (!nodeIdStr) throw new Error("usage: matter-cli inspect <nodeId>");
-      const result = await inspectNode(nodeIdStr);
-      process.stdout.write(JSON.stringify(result));
-      return;
-    }
-    case "session": {
-      const nodeIdStr = args[0];
-      if (!nodeIdStr) throw new Error("usage: matter-cli session <nodeId>");
-      await runSession(nodeIdStr);
-      return;
-    }
     default:
-      throw new Error(`unknown subcommand: ${subcommand ?? "(none)"}`);
+      throw new Error(`unknown subcommand: ${subcommand ?? "(none)"} (only "session" is supported)`);
   }
 }
 

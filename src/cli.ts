@@ -1,5 +1,4 @@
 import { environment } from "@raycast/api";
-import { spawn } from "node:child_process";
 import { join } from "node:path";
 
 // eslint-disable-next-line no-control-regex
@@ -48,49 +47,4 @@ export function cliEnv(): NodeJS.ProcessEnv {
     NODE_NO_WARNINGS: "1",
     MATTER_STORAGE_PATH: storagePath(),
   };
-}
-
-// Run a one-shot CLI subcommand and parse its stdout as JSON. Long-lived
-// session-mode interactions use MatterSession directly instead.
-export function runCli<T>(subcommand: string, args: string[] = []): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath(), subcommand, ...args], {
-      env: cliEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
-      if (exitCode !== 0) {
-        reject(new Error(extractRealError(stderr, exitCode)));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout) as T);
-      } catch (err) {
-        reject(new Error(`could not parse CLI output: ${(err as Error).message}`));
-      }
-    });
-  });
-}
-
-// Like runCli but discards stdout — for commands whose success is signalled
-// only by a zero exit code (e.g. decommission).
-export function runCliVoid(subcommand: string, args: string[] = []): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath(), subcommand, ...args], {
-      env: cliEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
-      if (exitCode === 0) resolve();
-      else reject(new Error(extractRealError(stderr, exitCode)));
-    });
-  });
 }

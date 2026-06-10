@@ -1,5 +1,5 @@
 import { Action, ActionPanel, Color, Icon, List, Toast, showToast } from "@raycast/api";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { assertNever } from "./assert";
 import { Concentration, DeviceType, Endpoint, MatterSession } from "./matter-session";
 import { BrightnessForm, ColorForm, ColorTempForm, RenameForm } from "./forms";
@@ -515,24 +515,21 @@ export function renderDetailMetadata(
   );
 }
 
-export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string }) {
+export function DeviceDetail({ nodeId, title, session }: { nodeId: string; title: string; session: MatterSession }) {
   const [endpoints, setEndpoints] = useState<Endpoint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [toggling, setToggling] = useState<Set<number>>(new Set());
   const [isShowingDetail, setIsShowingDetail] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
-  const sessionRef = useRef<MatterSession | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const session = new MatterSession(nodeId);
-    sessionRef.current = session;
 
     async function loadEndpoints() {
       try {
         await session.ready;
-        const result = await session.inspect();
+        const result = await session.inspect(nodeId);
         if (cancelled) return;
         setEndpoints(result);
         setLastUpdatedAt(Date.now());
@@ -548,9 +545,8 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
 
     return () => {
       cancelled = true;
-      session.close();
     };
-  }, [nodeId]);
+  }, [nodeId, session]);
 
   useEffect(() => {
     if (error) {
@@ -567,10 +563,8 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
   }, [lastUpdatedAt]);
 
   async function refresh() {
-    const session = sessionRef.current;
-    if (!session) return;
     try {
-      const result = await session.inspect();
+      const result = await session.inspect(nodeId);
       setEndpoints(result);
       setLastUpdatedAt(Date.now());
     } catch (err) {
@@ -602,8 +596,7 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
       run: (session: MatterSession) => Promise<T>;
     },
   ): Promise<void> {
-    const session = sessionRef.current;
-    if (!session || endpoint.endpointId == null) return;
+    if (endpoint.endpointId == null) return;
     const epId = endpoint.endpointId;
 
     patchEndpoint(epId, opts.optimistic);
@@ -637,7 +630,7 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
       optimistic: { onOff: on },
       rollback: { onOff: endpoint.onOff },
       reconcile: (result) => ({ onOff: result.onOff ?? on }),
-      run: (session) => session.setOnOff(endpoint.endpointId!, on),
+      run: (session) => session.setOnOff(nodeId, endpoint.endpointId!, on),
     });
   }
 
@@ -651,7 +644,7 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
       failTitle: "Brightness change failed",
       optimistic: { currentLevel: clamped, onOff: nextOnOff },
       rollback: { currentLevel: endpoint.currentLevel, onOff: endpoint.onOff },
-      run: (session) => session.setLevel(endpoint.endpointId!, clamped),
+      run: (session) => session.setLevel(nodeId, endpoint.endpointId!, clamped),
     });
   }
 
@@ -671,7 +664,7 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
         currentSaturation: endpoint.currentSaturation,
         colorMode: endpoint.colorMode,
       },
-      run: (session) => session.setColor(endpoint.endpointId!, matterColor.hue, matterColor.saturation),
+      run: (session) => session.setColor(nodeId, endpoint.endpointId!, matterColor.hue, matterColor.saturation),
     });
   }
 
@@ -685,7 +678,7 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
       failTitle: "Color temp change failed",
       optimistic: { colorTemperatureMireds: clampedMireds, colorMode: 2 },
       rollback: { colorTemperatureMireds: endpoint.colorTemperatureMireds, colorMode: endpoint.colorMode },
-      run: (session) => session.setColorTemp(endpoint.endpointId!, clampedMireds),
+      run: (session) => session.setColorTemp(nodeId, endpoint.endpointId!, clampedMireds),
     });
   }
 
@@ -696,7 +689,7 @@ export function DeviceDetail({ nodeId, title }: { nodeId: string; title: string 
       failTitle: "Rename failed",
       optimistic: { nodeLabel: label },
       rollback: { nodeLabel: endpoint.nodeLabel },
-      run: (session) => session.setNodeLabel(endpoint.endpointId!, label),
+      run: (session) => session.setNodeLabel(nodeId, endpoint.endpointId!, label),
     });
   }
 

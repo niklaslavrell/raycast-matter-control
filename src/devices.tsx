@@ -1,9 +1,8 @@
 import { Action, ActionPanel, Color, Icon, List, Toast, showToast } from "@raycast/api";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { runCli } from "./cli";
 import { ErrorBoundary } from "./error-boundary";
 import PairDeviceCommand from "./pair-device";
-import { Endpoint, MatterSession } from "./matter-session";
+import { Endpoint, MatterSession, NodeInfo } from "./matter-session";
 import {
   Category,
   DT,
@@ -26,13 +25,6 @@ import {
   stepLevel,
 } from "./format";
 
-type NodeInfo = {
-  nodeId: string;
-  productName: string | null;
-  vendorName: string | null;
-  advertisedName: string | null;
-};
-
 type NodeStatus = "connecting" | "ready" | "error";
 
 type NodeState = {
@@ -45,10 +37,6 @@ type NodeState = {
 
 function nodeTitle(info: NodeInfo): string {
   return info.productName ?? info.advertisedName ?? `Node ${info.nodeId}`;
-}
-
-function listNodes(): Promise<NodeInfo[]> {
-  return runCli<NodeInfo[]>("list");
 }
 
 const togglingKey = (nodeId: string, epId: number) => `${nodeId}:${epId}`;
@@ -67,15 +55,16 @@ function DevicesView() {
   const [isListingNodes, setIsListingNodes] = useState(true);
   const [toggling, setToggling] = useState<Set<string>>(new Set());
   const [isShowingDetail, setIsShowingDetail] = useState(false);
-  const sessionsRef = useRef<Map<string, MatterSession>>(new Map());
+  const sessionRef = useRef<MatterSession | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const session = new MatterSession();
+    sessionRef.current = session;
 
-    async function loadNodeEndpoints(info: NodeInfo, session: MatterSession) {
+    async function loadNodeEndpoints(info: NodeInfo) {
       try {
-        await session.ready;
-        const endpoints = await session.inspect();
+        const endpoints = await session.inspect(info.nodeId);
         if (cancelled) return;
         setNodesById((prev) => ({
           ...prev,
@@ -100,9 +89,17 @@ function DevicesView() {
     }
 
     async function bootstrap() {
+      try {
+        await session.ready;
+      } catch (err) {
+        if (cancelled) return;
+        setTopLevelError((err as Error).message);
+        setIsListingNodes(false);
+        return;
+      }
       let nodes: NodeInfo[];
       try {
-        nodes = await listNodes();
+        nodes = await session.listNodes();
       } catch (err) {
         if (cancelled) return;
         setTopLevelError((err as Error).message);
@@ -126,9 +123,7 @@ function DevicesView() {
       setNodesById(initialState);
 
       for (const info of nodes) {
-        const session = new MatterSession(info.nodeId);
-        sessionsRef.current.set(info.nodeId, session);
-        void loadNodeEndpoints(info, session);
+        void loadNodeEndpoints(info);
       }
     }
 
@@ -136,8 +131,8 @@ function DevicesView() {
 
     return () => {
       cancelled = true;
-      for (const session of sessionsRef.current.values()) session.close();
-      sessionsRef.current.clear();
+      session.close();
+      sessionRef.current = null;
     };
   }, []);
 
@@ -165,7 +160,7 @@ function DevicesView() {
 
   async function refreshNode(nodeId: string, session: MatterSession) {
     try {
-      const endpoints = await session.inspect();
+      const endpoints = await session.inspect(nodeId);
       setNodesById((prev) => ({
         ...prev,
         [nodeId]: {
@@ -185,16 +180,18 @@ function DevicesView() {
   }
 
   async function refreshAll() {
+    const session = sessionRef.current;
+    if (!session) return;
     const tasks: Promise<void>[] = [];
-    for (const [nodeId, session] of sessionsRef.current.entries()) {
+    for (const nodeId of Object.keys(nodesById)) {
       tasks.push(refreshNode(nodeId, session));
     }
     if (tasks.length > 0) await Promise.all(tasks);
   }
 
   // Common wrapper for any per-endpoint operation. Handles optimistic update,
-  // toggling-spinner state, animated toast, error rollback, and looking up the
-  // right session by nodeId.
+  // toggling-spinner state, animated toast, and error rollback. All operations
+  // route through the single MatterSession daemon, identified by nodeId.
   async function runEndpointOp<T>(
     nodeId: string,
     endpoint: Endpoint,
@@ -208,7 +205,7 @@ function DevicesView() {
       run: (session: MatterSession) => Promise<T>;
     },
   ): Promise<void> {
-    const session = sessionsRef.current.get(nodeId);
+    const session = sessionRef.current;
     if (!session || endpoint.endpointId == null) return;
     const epId = endpoint.endpointId;
     const key = togglingKey(nodeId, epId);
@@ -244,7 +241,7 @@ function DevicesView() {
       optimistic: { onOff: on },
       rollback: { onOff: endpoint.onOff },
       reconcile: (result) => ({ onOff: result.onOff ?? on }),
-      run: (session) => session.setOnOff(endpoint.endpointId!, on),
+      run: (session) => session.setOnOff(nodeId, endpoint.endpointId!, on),
     });
   }
 
@@ -258,7 +255,7 @@ function DevicesView() {
       failTitle: "Brightness change failed",
       optimistic: { currentLevel: clamped, onOff: nextOn },
       rollback: { currentLevel: endpoint.currentLevel, onOff: endpoint.onOff },
-      run: (session) => session.setLevel(endpoint.endpointId!, clamped),
+      run: (session) => session.setLevel(nodeId, endpoint.endpointId!, clamped),
     });
   }
 
@@ -278,7 +275,7 @@ function DevicesView() {
         currentSaturation: endpoint.currentSaturation,
         colorMode: endpoint.colorMode,
       },
-      run: (session) => session.setColor(endpoint.endpointId!, matter.hue, matter.saturation),
+      run: (session) => session.setColor(nodeId, endpoint.endpointId!, matter.hue, matter.saturation),
     });
   }
 
@@ -290,7 +287,7 @@ function DevicesView() {
       failTitle: "Color temp change failed",
       optimistic: { colorTemperatureMireds: clamped, colorMode: 2 },
       rollback: { colorTemperatureMireds: endpoint.colorTemperatureMireds, colorMode: endpoint.colorMode },
-      run: (session) => session.setColorTemp(endpoint.endpointId!, clamped),
+      run: (session) => session.setColorTemp(nodeId, endpoint.endpointId!, clamped),
     });
   }
 
@@ -301,7 +298,7 @@ function DevicesView() {
       failTitle: "Rename failed",
       optimistic: { nodeLabel: label },
       rollback: { nodeLabel: endpoint.nodeLabel },
-      run: (session) => session.setNodeLabel(endpoint.endpointId!, label),
+      run: (session) => session.setNodeLabel(nodeId, endpoint.endpointId!, label),
     });
   }
 
