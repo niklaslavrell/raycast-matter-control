@@ -124379,6 +124379,29 @@ function cleanupStaleLockfile() {
 }
 __name(cleanupStaleLockfile, "cleanupStaleLockfile");
 cleanupStaleLockfile();
+function releaseOwnLockfiles() {
+  const lockDir = join4(storagePath, CONTROLLER_ID);
+  const lockFile = join4(lockDir, "matter.lock");
+  const pidFile = join4(lockDir, "matter.pid");
+  try {
+    if (existsSync4(pidFile)) {
+      const holderPid = Number(readFileSync3(pidFile, "utf8").trim().split(/\s+/)[0]);
+      if (holderPid === process.pid) {
+        rmSync2(pidFile, { force: true });
+        rmSync2(lockFile, { force: true });
+      }
+    }
+  } catch {
+  }
+}
+__name(releaseOwnLockfiles, "releaseOwnLockfiles");
+process.on("exit", releaseOwnLockfiles);
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(signal, () => {
+    releaseOwnLockfiles();
+    process.exit(0);
+  });
+}
 async function startWithLockRetry(controller) {
   const maxAttempts = 5;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {

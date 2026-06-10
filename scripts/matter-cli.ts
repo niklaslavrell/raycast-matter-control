@@ -95,6 +95,38 @@ function cleanupStaleLockfile(): void {
 
 cleanupStaleLockfile();
 
+// Force-release the matter.js lockfiles on EVERY exit path — even SIGTERM
+// from Raycast's worker teardown, or matter.js's close() hanging past our
+// 3s timeout. Without this, an unclean exit leaves matter.lock + matter.pid
+// pointing at our (now-dead) PID, and the next CLI invocation has to wait
+// for the OS to mark us defunct before it can reclaim. We're the only
+// writer to this storage, so unconditional cleanup is safe.
+function releaseOwnLockfiles(): void {
+  const lockDir = join(storagePath!, CONTROLLER_ID);
+  const lockFile = join(lockDir, "matter.lock");
+  const pidFile = join(lockDir, "matter.pid");
+  try {
+    if (existsSync(pidFile)) {
+      const holderPid = Number(readFileSync(pidFile, "utf8").trim().split(/\s+/)[0]);
+      // Only unlink if WE hold the lock. Don't clobber a healthy peer.
+      if (holderPid === process.pid) {
+        rmSync(pidFile, { force: true });
+        rmSync(lockFile, { force: true });
+      }
+    }
+  } catch {
+    // Best effort; we're on the exit path.
+  }
+}
+
+process.on("exit", releaseOwnLockfiles);
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  process.on(signal, () => {
+    releaseOwnLockfiles();
+    process.exit(0);
+  });
+}
+
 // matter.js's own lock acquisition is one-shot — it does NOT retry, and it
 // considers zombie/defunct processes as still holding the lock. When a
 // previous CLI crashed or got killed by Raycast's worker teardown, the lock
