@@ -31,7 +31,7 @@ import {
   RelativeHumidityMeasurement,
   TemperatureMeasurement,
   TotalVolatileOrganicCompoundsConcentrationMeasurement,
-} from "@project-chip/matter.js/cluster";
+} from "@matter/main/clusters";
 import type { Endpoint } from "@project-chip/matter.js/device";
 import type { PairedNode } from "@project-chip/matter.js/device";
 import { mkdirSync } from "node:fs";
